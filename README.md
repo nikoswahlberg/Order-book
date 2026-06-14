@@ -131,8 +131,7 @@ display boundary.
 
 ## Benchmark results
 
-Measured on this repository with 5 000 000 generated events (Apple/Linux class
-single core, `-O2`). Throughput depends on machine load; latency percentiles
+Measured on this repository with 5 000 000 generated events (Apple M3 Pro, single core, '-O2'). Throughput depends on machine load; latency percentiles
 are more stable.
 
 | Metric                | Value                    |
