@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Book Simulator — C++ / WASM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="order_book.js"></script>
+<style>
+  /* ── Design tokens ──────────────────────────────────────────────────────── */
+  :root {
+    --bg:        #0a0e14;
+    --surface:   #111720;
+    --border:    #1e2d3d;
+    --bid:       #00c896;
+    --ask:       #f0503c;
+    --accent:    #4dabf7;
+    --text:      #cdd9e5;
+    --muted:     #4a5568;
+    --trade:     #f6c90e;
+    --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --font-ui:   'Inter', system-ui, sans-serif;
+  }
+
+  /* ── Reset ──────────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 13px; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────────── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  header h1 {
+    font-family: var(--font-mono);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.02em;
+  }
+  header .sub {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: var(--font-mono);
+  }
+  .pill {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .pill.ready { border-color: var(--bid); color: var(--bid); }
+  .pill.loading { border-color: var(--accent); color: var(--accent); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+
+  /* ── Ticker bar ──────────────────────────────────────────────────────────── */
+  .ticker {
+    display: flex;
+    gap: 32px;
+    padding: 8px 24px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--surface);
+  }
+  .tick-item { display: flex; flex-direction: column; gap: 1px; }
+  .tick-label { color: var(--muted); font-size: 10px; }
+  .tick-val { color: var(--text); }
+  .tick-val.bid { color: var(--bid); }
+  .tick-val.ask { color: var(--ask); }
+  .tick-val.trade { color: var(--trade); }
+
+  /* ── Main layout ─────────────────────────────────────────────────────────── */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 280px 1fr 280px;
+    grid-template-rows: auto 1fr;
+    gap: 1px;
+    background: var(--border);
+  }
+  .panel {
+    background: var(--bg);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .panel-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+
+  /* ── Order book table ────────────────────────────────────────────────────── */
+  .book-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .book-table th {
+    color: var(--muted);
+    font-weight: 500;
+    padding: 3px 0;
+    text-align: right;
+    font-size: 10px;
+  }
+  .book-table th:first-child { text-align: left; }
+  .book-table td {
+    padding: 2px 0;
+    text-align: right;
+    position: relative;
+  }
+  .book-table td:first-child { text-align: left; color: var(--muted); }
+  .ask-row td { color: var(--ask); }
+  .bid-row td { color: var(--bid); }
+  .spread-row td {
+    color: var(--muted);
+    font-size: 10px;
+    text-align: center;
+    padding: 4px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  /* Depth bars rendered as a background on the qty cell */
+  .depth-bar {
+    position: absolute;
+    top: 0; bottom: 0; right: 0;
+    opacity: 0.12;
+    border-radius: 1px;
+    transition: width 0.15s ease;
+  }
+  .ask-bar { background: var(--ask); }
+  .bid-bar { background: var(--bid); }
+
+  /* ── Chart panel ─────────────────────────────────────────────────────────── */
+  .chart-wrap {
+    position: relative;
+    height: 240px;
+    margin-top: 4px;
+  }
+
+  /* ── Trade feed ──────────────────────────────────────────────────────────── */
+  .trade-feed {
+    flex: 1;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 200px;
+  }
+  .trade-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 4px;
+    border-radius: 2px;
+    animation: fadeIn 0.3s ease;
+  }
+  .trade-entry.buy  { background: #00c89611; color: var(--bid); }
+  .trade-entry.sell { background: #f0503c11; color: var(--ask); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+
+  /* ── Controls ────────────────────────────────────────────────────────────── */
+  .ctrl-group { display: flex; flex-direction: column; gap: 6px; }
+  .ctrl-group label { font-size: 10px; color: var(--muted); font-family: var(--font-mono); }
+  .ctrl-group input, .ctrl-group select {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+  .ctrl-group input:focus, .ctrl-group select:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .btn-row { display: flex; gap: 6px; }
+  .btn {
+    flex: 1;
+    padding: 7px 8px;
+    border: none;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    letter-spacing: 0.03em;
+  }
+  .btn:hover { opacity: 0.8; }
+  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-bid  { background: #00c89622; color: var(--bid); border: 1px solid #00c89644; }
+  .btn-ask  { background: #f0503c22; color: var(--ask); border: 1px solid #f0503c44; }
+  .btn-neu  { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-acc  { background: #4dabf722; color: var(--accent); border: 1px solid #4dabf744; }
+
+  /* ── Tabs ────────────────────────────────────────────────────────────────── */
+  .tabs { display: flex; gap: 2px; }
+  .tab {
+    flex: 1;
+    padding: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px 3px 0 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    text-align: center;
+    letter-spacing: 0.05em;
+  }
+  .tab.active { background: var(--border); color: var(--accent); border-color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: flex; flex-direction: column; gap: 10px; }
+
+  /* ── Benchmark results ────────────────────────────────────────────────────── */
+  .bench-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .bench-stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px 10px;
+  }
+  .bench-stat-label { font-size: 9px; color: var(--muted); font-family: var(--font-mono); letter-spacing: 0.08em; }
+  .bench-stat-val   { font-size: 16px; font-weight: 600; font-family: var(--font-mono); color: var(--accent); margin-top: 2px; }
+  .bench-stat-unit  { font-size: 9px; color: var(--muted); }
+
+  /* ── Slider ───────────────────────────────────────────────────────────────── */
+  .slider-row { display: flex; align-items: center; gap: 8px; }
+  .slider-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .slider-row span { font-family: var(--font-mono); font-size: 11px; color: var(--text); width: 38px; text-align: right; }
+
+  /* ── Simulation scenario chips ────────────────────────────────────────────── */
+  .scenarios { display: flex; gap: 4px; flex-wrap: wrap; }
+  .scenario-chip {
+    padding: 3px 8px;
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: var(--surface);
+    transition: all 0.15s;
+  }
+  .scenario-chip:hover, .scenario-chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: #4dabf711;
+  }
+
+  /* ── Log / info strip ────────────────────────────────────────────────────── */
+  .log-strip {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    min-height: 18px;
+  }
+
+  /* ── Bottom status bar ───────────────────────────────────────────────────── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 5px 24px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    gap: 24px;
+  }
+
+  /* ── Auto-sim button ──────────────────────────────────────────────────────── */
+  .autosim-btn {
+    width: 100%;
+    padding: 7px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    transition: all 0.15s;
+  }
+  .autosim-btn.running {
+    border-color: var(--bid);
+    color: var(--bid);
+    background: #00c89611;
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse { 50% { opacity: 0.7; } }
+
+  /* ── Responsive collapse for narrow ─────────────────────────────────────── */
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header>
+  <h1>obs://order-book</h1>
+  <span class="sub">C++ matching engine → WebAssembly · POWER/EUR · EUR/MWh</span>
+  <span class="pill loading" id="wasm-pill">⬤ loading wasm</span>
+</header>
+
+<!-- ── Ticker ─────────────────────────────────────────────────────────────── -->
+<div class="ticker">
+  <div class="tick-item"><span class="tick-label">BEST BID</span><span class="tick-val bid" id="tk-bid">—</span></div>
+  <div class="tick-item"><span class="tick-label">BEST ASK</span><span class="tick-val ask" id="tk-ask">—</span></div>
+  <div class="tick-item"><span class="tick-label">SPREAD</span><span class="tick-val" id="tk-spread">—</span></div>
+  <div class="tick-item"><span class="tick-label">LAST TRADE</span><span class="tick-val trade" id="tk-last">—</span></div>
+  <div class="tick-item"><span class="tick-label">TRADES</span><span class="tick-val" id="tk-trades">0</span></div>
+  <div class="tick-item"><span class="tick-label">RESTING</span><span class="tick-val" id="tk-resting">0</span></div>
+</div>
+
+<!-- ── Main ───────────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Left: live order book -->
+  <div class="panel" style="grid-row: 1 / 3;">
+    <div class="panel-title">Order Book · L2 Depth</div>
+    <table class="book-table" id="book-table">
+      <thead><tr><th>ID count</th><th>MW</th><th>€/MWh</th></tr></thead>
+      <tbody id="ask-body"></tbody>
+      <tbody><tr class="spread-row"><td colspan="3" id="spread-cell">spread: —</td></tr></tbody>
+      <tbody id="bid-body"></tbody>
+    </table>
+    <div class="panel-title" style="margin-top:4px">Trade Feed</div>
+    <div class="trade-feed" id="trade-feed"></div>
+    <div class="log-strip" id="log-strip">Waiting for WASM module...</div>
+  </div>
+
+  <!-- Centre: depth chart + order placement -->
+  <div class="panel" style="grid-row: 1;">
+    <div class="panel-title">Market Depth Chart</div>
+    <div class="chart-wrap">
+      <canvas id="depth-chart"></canvas>
+    </div>
+
+    <!-- Auto-sim -->
+    <button class="autosim-btn" id="autosim-btn" onclick="toggleAutoSim()">
+      ▶  Start auto-simulation
+    </button>
+
+    <!-- Manual order controls -->
+    <div class="panel-title" style="margin-top:4px">Place Order Manually</div>
+    <div class="ctrl-group">
+      <label>Price (€/MWh)</label>
+      <input type="number" id="inp-price" value="50.00" step="0.10">
+    </div>
+    <div class="ctrl-group">
+      <label>Quantity (MW)</label>
+      <input type="number" id="inp-qty" value="5" step="1" min="1">
+    </div>
+    <div class="ctrl-group">
+      <label>Order type</label>
+      <select id="inp-type">
+        <option value="limit">Limit</option>
+        <option value="market">Market</option>
+      </select>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-bid" onclick="placeOrder(true)">BUY bid</button>
+      <button class="btn btn-ask" onclick="placeOrder(false)">SELL ask</button>
+    </div>
+    <div class="ctrl-group">
+      <label>Cancel order ID</label>
+      <input type="number" id="inp-cancel" placeholder="e.g. 3">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-neu" onclick="cancelOrder()">Cancel order</button>
+      <button class="btn btn-neu" onclick="resetBook()">Reset book</button>
+    </div>
+  </div>
+
+  <!-- Right: Simulation + Benchmark tabs -->
+  <div class="panel" style="grid-row: 1 / 3;">
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('sim')">SIMULATION</div>
+      <div class="tab" onclick="switchTab('bench')">BENCHMARK</div>
+    </div>
+
+    <!-- Simulation tab -->
+    <div class="tab-content active" id="tab-sim">
+      <div class="ctrl-group">
+        <label>Preset scenario</label>
+        <div class="scenarios">
+          <span class="scenario-chip active" onclick="applyScenario(this,'normal')">Normal</span>
+          <span class="scenario-chip" onclick="applyScenario(this,'volatile')">Volatile</span>
+          <span class="scenario-chip" onclick="applyScenario(this,'thin')">Thin book</span>
+          <span class="scenario-chip" onclick="applyScenario(this,'hft')">HFT-like</span>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <label>Events</label>
+        <div class="slider-row">
+          <input type="range" id="sl-events" min="1000" max="500000" step="1000" value="50000"
+            oninput="document.getElementById('sl-events-val').textContent=fmtNum(+this.value)">
+          <span id="sl-events-val">50 000</span>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <label>Market order probability</label>
+        <div class="slider-row">
+          <input type="range" id="sl-market" min="0" max="0.3" step="0.01" value="0.05"
+            oninput="document.getElementById('sl-market-val').textContent=(+this.value*100).toFixed(0)+'%'">
+          <span id="sl-market-val">5%</span>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <label>Cancel probability</label>
+        <div class="slider-row">
+          <input type="range" id="sl-cancel" min="0" max="0.5" step="0.01" value="0.25"
+            oninput="document.getElementById('sl-cancel-val').textContent=(+this.value*100).toFixed(0)+'%'">
+          <span id="sl-cancel-val">25%</span>
+        </div>
+      </div>
+      <div class="ctrl-group">
+        <label>Aggressive order probability</label>
+        <div class="slider-row">
+          <input type="range" id="sl-aggr" min="0" max="0.5" step="0.01" value="0.20"
+            oninput="document.getElementById('sl-aggr-val').textContent=(+this.value*100).toFixed(0)+'%'">
+          <span id="sl-aggr-val">20%</span>
+        </div>
+      </div>
+      <button class="btn btn-acc" id="sim-btn" onclick="runSim()" style="width:100%;padding:9px">
+        ▶ Run simulation
+      </button>
+
+      <!-- Sim results -->
+      <div id="sim-results" style="display:none">
+        <div class="panel-title">Result</div>
+        <div class="bench-grid">
+          <div class="bench-stat"><div class="bench-stat-label">TRADES</div><div class="bench-stat-val" id="sr-trades">—</div></div>
+          <div class="bench-stat"><div class="bench-stat-label">VOLUME (MW)</div><div class="bench-stat-val" id="sr-vol">—</div></div>
+          <div class="bench-stat"><div class="bench-stat-label">RESTING</div><div class="bench-stat-val" id="sr-rest">—</div></div>
+          <div class="bench-stat"><div class="bench-stat-label">SPREAD</div><div class="bench-stat-val" id="sr-spread">—</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Benchmark tab -->
+    <div class="tab-content" id="tab-bench">
+      <div class="ctrl-group">
+        <label>Events to benchmark</label>
+        <div class="slider-row">
+          <input type="range" id="bl-events" min="10000" max="2000000" step="10000" value="500000"
+            oninput="document.getElementById('bl-events-val').textContent=fmtNum(+this.value)">
+          <span id="bl-events-val">500 000</span>
+        </div>
+      </div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);line-height:1.6">
+        Runs the matching engine against a synthetic order stream entirely inside the WASM module.
+        Measures wall time and per-event latency percentiles. The engine runs on your CPU — no server involved.
+      </div>
+      <button class="btn btn-acc" id="bench-btn" onclick="runBench()" style="width:100%;padding:9px">
+        ⚡ Run benchmark
+      </button>
+      <div id="bench-results" style="display:none">
+        <div class="panel-title">Result</div>
+        <div class="bench-grid">
+          <div class="bench-stat">
+            <div class="bench-stat-label">THROUGHPUT</div>
+            <div class="bench-stat-val" id="br-tp">—</div>
+            <div class="bench-stat-unit">events / sec</div>
+          </div>
+          <div class="bench-stat">
+            <div class="bench-stat-label">WALL TIME</div>
+            <div class="bench-stat-val" id="br-wall">—</div>
+            <div class="bench-stat-unit">milliseconds</div>
+          </div>
+          <div class="bench-stat">
+            <div class="bench-stat-label">LATENCY p50</div>
+            <div class="bench-stat-val" id="br-p50">—</div>
+            <div class="bench-stat-unit">nanoseconds</div>
+          </div>
+          <div class="bench-stat">
+            <div class="bench-stat-label">LATENCY p99</div>
+            <div class="bench-stat-val" id="br-p99">—</div>
+            <div class="bench-stat-unit">nanoseconds</div>
+          </div>
+          <div class="bench-stat">
+            <div class="bench-stat-label">LATENCY p90</div>
+            <div class="bench-stat-val" id="br-p90">—</div>
+            <div class="bench-stat-unit">nanoseconds</div>
+          </div>
+          <div class="bench-stat">
+            <div class="bench-stat-label">LATENCY p99.9</div>
+            <div class="bench-stat-val" id="br-p999">—</div>
+            <div class="bench-stat-unit">nanoseconds</div>
+          </div>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-top:4px">
+          Note: includes ~50–80 ns clock-read overhead per event. p50/p99 are the meaningful figures.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  <span>obs — limit order book simulator</span>
+  <span>C++20 compiled to WebAssembly via Emscripten</span>
+  <span>price-time priority · O(1) cancel · std::map levels</span>
+  <span id="ft-events">0 events processed</span>
+</footer>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let Module = null;   // the WASM module
+let book   = null;   // JSOrderBook instance
+let chart  = null;   // Chart.js depth chart
+let autoSim = null;  // setInterval handle
+let totalTrades = 0;
+let totalEvents = 0;
+let lastPrice = null;
+
+// ── Number formatting (European style, space thousands) ────────────────────
+function fmtNum(n) {
+  return Math.round(n).toLocaleString('fi-FI');
+}
+function fmtDec(n, d=2) {
+  return n.toLocaleString('fi-FI', {minimumFractionDigits: d, maximumFractionDigits: d});
+}
+
+// ── WASM bootstrap ─────────────────────────────────────────────────────────
+OrderBookModule().then(mod => {
+  Module = mod;
+  book   = new mod.OrderBook();
+  document.getElementById('wasm-pill').textContent = '⬤ wasm ready';
+  document.getElementById('wasm-pill').className   = 'pill ready';
+  setLog('WASM module loaded — C++ matching engine running in your browser.');
+  seedBook();
+  initChart();
+  refreshBook();
+}).catch(err => {
+  document.getElementById('wasm-pill').textContent = '⬤ load failed';
+  setLog('Failed to load WASM: ' + err);
+});
+
+// ── Chart initialisation ───────────────────────────────────────────────────
+function initChart() {
+  const ctx = document.getElementById('depth-chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'Bid depth',
+          data: [],
+          backgroundColor: 'rgba(0,200,150,0.25)',
+          borderColor: 'rgba(0,200,150,0.7)',
+          borderWidth: 1,
+        },
+        {
+          label: 'Ask depth',
+          data: [],
+          backgroundColor: 'rgba(240,80,60,0.25)',
+          borderColor: 'rgba(240,80,60,0.7)',
+          borderWidth: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 120 },
+      plugins: {
+        legend: {
+          labels: { color: '#4a5568', font: { family: 'monospace', size: 10 } }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${fmtNum(ctx.parsed.y)} MW`
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#4a5568', font: { family: 'monospace', size: 9 }, maxRotation: 45 },
+          grid:  { color: '#1e2d3d' }
+        },
+        y: {
+          ticks: { color: '#4a5568', font: { family: 'monospace', size: 9 } },
+          grid:  { color: '#1e2d3d' },
+          title: { display: true, text: 'MW', color: '#4a5568',
+                   font: { family: 'monospace', size: 9 } }
+        }
+      }
+    }
+  });
+}
+
+// ── Seed the book with realistic starting state ────────────────────────────
+function seedBook() {
+  if (!book) return;
+  [
+    [true,  49.80, 10], [true, 49.50, 20], [true, 49.20, 8],
+    [true,  48.90, 15], [true, 48.60, 30],
+    [false, 50.20, 12], [false, 50.50, 7], [false, 50.80, 18],
+    [false, 51.10, 5],  [false, 51.40, 22]
+  ].forEach(([buy, price, qty]) => book.addLimit(buy, price, qty));
+}
+
+// ── Refresh the order book display ────────────────────────────────────────
+function refreshBook() {
+  if (!book) return;
+  const snap = JSON.parse(book.getSnapshot(8));
+
+  // Ticker bar
+  document.getElementById('tk-bid').textContent    = snap.best_bid > 0 ? fmtDec(snap.best_bid) : '—';
+  document.getElementById('tk-ask').textContent    = snap.best_ask > 0 ? fmtDec(snap.best_ask) : '—';
+  document.getElementById('tk-spread').textContent = snap.spread   > 0 ? fmtDec(snap.spread)   : '—';
+  document.getElementById('tk-resting').textContent = fmtNum(snap.resting);
+  document.getElementById('tk-trades').textContent  = fmtNum(totalTrades);
+  if (lastPrice) document.getElementById('tk-last').textContent = fmtDec(lastPrice);
+
+  // Ask side (display reversed so best ask is closest to spread)
+  const maxAsk = snap.asks.reduce((m, l) => Math.max(m, l.quantity), 1);
+  const maxBid = snap.bids.reduce((m, l) => Math.max(m, l.quantity), 1);
+
+  document.getElementById('ask-body').innerHTML =
+    [...snap.asks].reverse().map(l => `
+      <tr class="ask-row">
+        <td>${l.orders}</td>
+        <td style="position:relative">
+          ${fmtNum(l.quantity)}
+          <span class="depth-bar ask-bar" style="width:${Math.round(l.quantity/maxAsk*100)}%"></span>
+        </td>
+        <td>${fmtDec(l.price)}</td>
+      </tr>`).join('');
+
+  document.getElementById('spread-cell').textContent =
+    snap.spread > 0 ? `spread  ${fmtDec(snap.spread)}` : 'spread  —';
+
+  document.getElementById('bid-body').innerHTML =
+    snap.bids.map(l => `
+      <tr class="bid-row">
+        <td>${l.orders}</td>
+        <td style="position:relative">
+          ${fmtNum(l.quantity)}
+          <span class="depth-bar bid-bar" style="width:${Math.round(l.quantity/maxBid*100)}%"></span>
+        </td>
+        <td>${fmtDec(l.price)}</td>
+      </tr>`).join('');
+
+  // Depth chart
+  if (chart) {
+    const bidLabels = snap.bids.map(l => fmtDec(l.price));
+    const askLabels = snap.asks.map(l => fmtDec(l.price));
+    const allLabels = [...[...bidLabels].reverse(), ...askLabels];
+
+    const bidQtys = snap.bids.map(l => l.quantity);
+    const askQtys = snap.asks.map(l => l.quantity);
+    const bidData = [...Array(bidQtys.length).fill(null).map((_,i) => bidQtys[bidQtys.length-1-i]), ...Array(askLabels.length).fill(null)];
+    const askData = [...Array(bidLabels.length).fill(null), ...askQtys];
+
+    chart.data.labels           = allLabels;
+    chart.data.datasets[0].data = bidData;
+    chart.data.datasets[1].data = askData;
+    chart.update();
+  }
+
+  totalEvents++;
+  document.getElementById('ft-events').textContent = fmtNum(totalEvents) + ' events processed';
+}
+
+// ── Add a trade to the feed ────────────────────────────────────────────────
+function addTrades(tradesJson, side) {
+  const trades = JSON.parse(tradesJson);
+  if (!trades.length) return;
+  const feed = document.getElementById('trade-feed');
+  trades.forEach(t => {
+    lastPrice = t.price;
+    totalTrades++;
+    const el = document.createElement('div');
+    el.className = 'trade-entry ' + (side ? 'buy' : 'sell');
+    el.innerHTML = `<span>${fmtNum(t.quantity)} MW</span><span>@ ${fmtDec(t.price)}</span><span>#${t.maker_id}×${t.taker_id}</span>`;
+    feed.prepend(el);
+    while (feed.children.length > 50) feed.removeChild(feed.lastChild);
+  });
+}
+
+// ── Place order manually ───────────────────────────────────────────────────
+function placeOrder(isBuy) {
+  if (!book) return;
+  const price = parseFloat(document.getElementById('inp-price').value);
+  const qty   = parseInt(document.getElementById('inp-qty').value);
+  const type  = document.getElementById('inp-type').value;
+  if (isNaN(price) || isNaN(qty) || qty <= 0) return;
+  let trades;
+  if (type === 'market') {
+    trades = book.addMarket(isBuy, qty);
+  } else {
+    trades = book.addLimit(isBuy, price, qty);
+  }
+  addTrades(trades, isBuy);
+  setLog((isBuy?'BUY ':'SELL ') + qty + ' MW @ ' + fmtDec(price) + (type==='market'?' [MARKET]':''));
+  refreshBook();
+}
+
+function cancelOrder() {
+  if (!book) return;
+  const id = parseInt(document.getElementById('inp-cancel').value);
+  if (isNaN(id)) return;
+  const ok = book.cancel(id);
+  setLog(ok ? 'Cancelled order #' + id : 'Order #' + id + ' not found');
+  refreshBook();
+}
+
+function resetBook() {
+  if (!book) return;
+  book.reset();
+  totalTrades = 0; totalEvents = 0; lastPrice = null;
+  document.getElementById('trade-feed').innerHTML = '';
+  seedBook();
+  setLog('Book reset.');
+  refreshBook();
+}
+
+// ── Auto-simulation ────────────────────────────────────────────────────────
+const MID = 50.0;
+function autoSimStep() {
+  if (!book) return;
+  const r = Math.random();
+  const side = Math.random() < 0.5;
+  if (r < 0.25 && Math.random() > 0.7) {
+    // market order
+    const qty = Math.ceil(Math.random() * 10);
+    const t = book.addMarket(side, qty);
+    addTrades(t, side);
+  } else if (r < 0.55) {
+    // passive limit
+    const off = (Math.floor(Math.random()*5)+1) * 0.10;
+    const price = side ? MID - off : MID + off;
+    const qty = Math.ceil(Math.random() * 15);
+    const t = book.addLimit(side, price, qty);
+    addTrades(t, side);
+  } else {
+    // aggressive limit (crosses spread)
+    const off = (Math.floor(Math.random()*3)+1) * 0.10;
+    const price = side ? MID + off : MID - off;
+    const qty = Math.ceil(Math.random() * 8);
+    const t = book.addLimit(side, price, qty);
+    addTrades(t, side);
+  }
+  refreshBook();
+}
+
+function toggleAutoSim() {
+  const btn = document.getElementById('autosim-btn');
+  if (autoSim) {
+    clearInterval(autoSim);
+    autoSim = null;
+    btn.textContent = '▶  Start auto-simulation';
+    btn.classList.remove('running');
+  } else {
+    autoSim = setInterval(autoSimStep, 400);
+    btn.textContent = '⏹  Stop auto-simulation';
+    btn.classList.add('running');
+  }
+}
+
+// ── Simulation ─────────────────────────────────────────────────────────────
+function runSim() {
+  if (!Module) return;
+  const btn = document.getElementById('sim-btn');
+  btn.disabled = true; btn.textContent = '⏳ Running...';
+  setTimeout(() => {
+    const n      = parseInt(document.getElementById('sl-events').value);
+    const pm     = parseFloat(document.getElementById('sl-market').value);
+    const pc     = parseFloat(document.getElementById('sl-cancel').value);
+    const pa     = parseFloat(document.getElementById('sl-aggr').value);
+    const seed   = Math.floor(Math.random() * 1000000);
+    const result = JSON.parse(Module.runSimulation(n, seed, pm, pc, pa));
+
+    document.getElementById('sr-trades').textContent = fmtNum(result.total_trades);
+    document.getElementById('sr-vol').textContent    = fmtNum(result.total_volume);
+    document.getElementById('sr-rest').textContent   = fmtNum(result.resting);
+    document.getElementById('sr-spread').textContent = result.spread > 0 ? fmtDec(result.spread) : '—';
+    document.getElementById('sim-results').style.display = 'block';
+    setLog('Simulation done: ' + fmtNum(n) + ' events → ' + fmtNum(result.total_trades) + ' trades');
+    btn.disabled = false; btn.textContent = '▶ Run simulation';
+  }, 10);
+}
+
+// ── Scenarios ──────────────────────────────────────────────────────────────
+const SCENARIOS = {
+  normal:   { market: 0.05, cancel: 0.25, aggr: 0.20 },
+  volatile: { market: 0.15, cancel: 0.10, aggr: 0.40 },
+  thin:     { market: 0.02, cancel: 0.45, aggr: 0.10 },
+  hft:      { market: 0.01, cancel: 0.60, aggr: 0.05 },
+};
+function applyScenario(el, name) {
+  document.querySelectorAll('.scenario-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  const s = SCENARIOS[name];
+  const set = (id, val, pct=true) => {
+    document.getElementById(id).value = val;
+    document.getElementById(id+'-val').textContent = pct ? Math.round(val*100)+'%' : val;
+  };
+  set('sl-market', s.market);
+  set('sl-cancel', s.cancel);
+  set('sl-aggr',   s.aggr);
+}
+
+// ── Benchmark ──────────────────────────────────────────────────────────────
+function runBench() {
+  if (!Module) return;
+  const btn = document.getElementById('bench-btn');
+  btn.disabled = true; btn.textContent = '⏳ Benchmarking...';
+  setTimeout(() => {
+    const n = parseInt(document.getElementById('bl-events').value);
+    const r = JSON.parse(Module.runBenchmark(n));
+    document.getElementById('br-tp').textContent   = fmtNum(Math.round(r.throughput));
+    document.getElementById('br-wall').textContent = fmtDec(r.wall_ms, 1);
+    document.getElementById('br-p50').textContent  = fmtDec(r.p50, 0);
+    document.getElementById('br-p90').textContent  = fmtDec(r.p90, 0);
+    document.getElementById('br-p99').textContent  = fmtDec(r.p99, 0);
+    document.getElementById('br-p999').textContent = fmtDec(r.p999, 0);
+    document.getElementById('bench-results').style.display = 'block';
+    setLog('Benchmark: ' + fmtNum(n) + ' events at ' + fmtNum(Math.round(r.throughput)) + ' events/s');
+    btn.disabled = false; btn.textContent = '⚡ Run benchmark';
+  }, 10);
+}
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    const names = ['sim','bench'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+}
+
+// ── Utility ────────────────────────────────────────────────────────────────
+function setLog(msg) {
+  document.getElementById('log-strip').textContent = '> ' + msg;
+}
+</script>
+</body>
+</html>
