@@ -134,14 +134,14 @@ display boundary.
 Measured on this repository with 5 000 000 generated events (Apple M3 Pro, single core, '-O2'). Throughput depends on machine load; latency percentiles
 are more stable.
 
-| Metric                | Value                    |
-|-----------------------|--------------------------|
-| events                | 5 000 000                |
-| trades produced       | ~3 300 000               |
-| throughput            | 1,8–2,9 million events/s |
-| latency p50           | ~220 ns                  |
-| latency p99           | ~1 400 ns                |
-| latency p99,9         | ~25 000 ns               |
+| Metric                | Value                      |
+|-----------------------|----------------------------|
+| events                | 5 000 000                  |
+| trades produced       | ~3 340 000                 |
+| throughput            | 10,4 million events/s      |
+| latency p50           | 83 ns                      |
+| latency p99           | 334 ns                     |
+| latency p99,9         | 1 084 ns                   |
 
 Two honest caveats: the per-event latency includes the cost of two clock reads
 (roughly 50–80 ns of measurement overhead), and the maximum latency is
