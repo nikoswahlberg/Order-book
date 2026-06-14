@@ -17,7 +17,7 @@ public:
 
     std::uint64_t replay(const std::vector<Event>& events,
                          std::vector<Trade>& trades) {
-        std::uint64_t add_ordinal = 0;
+        [[maybe_unused]] std::uint64_t add_ordinal = 0;
         for (const Event& e : events) {
             switch (e.type) {
                 case EventType::AddLimit: {
